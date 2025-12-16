@@ -1,0 +1,41 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400..700;1,400..700&display=swap');
+
+@font-face {
+    font-family: "Raveo";
+    src: url("/raveo.woff2") format("woff2");
+    font-weight: 400;
+    font-style: normal;
+}
+
+@import "tailwindcss";
+
+
+@theme {
+    --color-iris-yellow: oklch(0.85 0.17 85.6);
+    --color-iris-light-yellow: oklch(0.9112 0.0831 85.8);
+    --color-iris-white: oklch(1 0 0);
+    --color-iris-gray: oklch(0.85 0.0092 85.6);
+    --color-iris-black: oklch(0 0 0);
+}
+
+html {
+    background-color: var(--color-iris-gray);
+    color: var(--color-iris-black);
+    font-family: "Raveo", sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: "Lora", serif;
+}
+
+button {
+    @apply cursor-pointer transition-opacity duration-200;
+
+    &:hover {
+        @apply opacity-90;
+    }
+
+    &:disabled {
+        @apply opacity-50 cursor-not-allowed;
+    }
+}
