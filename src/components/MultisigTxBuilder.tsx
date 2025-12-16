@@ -4,10 +4,36 @@ import init, {
     LockPrimitive,
     Pkh,
     GrpcClient,
+
 } from "@nockbox/iris-wasm";
 import { useEffect, useState } from "react";
 import { useNockchain } from "../hooks/useNockchain";
-
+/*
+{
+  name: { first: "...", last: "..." },
+  note: {
+    noteVersion: {
+      v1: {
+        originPage: { value: "..." },
+        noteData: { hash: "..." },
+        assets: { value: 1234567 }  // ← nicks amount here
+      }
+    }
+  }
+}
+*/
+interface BalanceEntry {
+    name: { first: string, last: string };
+    note: {
+        noteVersion: {
+            v1: {
+                originPage: { value: string };
+                noteData: { hash: string };
+                assets: { value: number };
+            }
+        }
+    }
+}
 export function MultisigTxBuilder() {
 /*
 
@@ -77,6 +103,16 @@ console.log('Transaction accepted:', accepted);
     const [isReady, setIsReady] = useState(false);
     const [requiredPubkeys, setRequiredPubkeys] = useState<string[]>(['']);
     const [spendCondition, setSpendCondition] = useState<SpendCondition | null>(null);
+    const [balance, setBalance] = useState<number | null>(null);
+    const [amount, setAmount] = useState<number>(0);
+    const [recipient, setRecipient] = useState<string>('');
+    const [fee, setFee] = useState<number>(2850816);
+    const [errors, setErrors] = useState<string[]>([]);
+    const [sigsCount, setSigsCount] = useState<number>(0);
+
+    useEffect(() => {
+        setSigsCount(requiredPubkeys.filter(pk => pk).length);
+    }, [requiredPubkeys]);
 
     const createSpendCondition = () => {
         try {
@@ -105,18 +141,27 @@ console.log('Transaction accepted:', accepted);
 
     useEffect(() => {
         if (grpcEndpoint && pkh && isReady) {
-            console.log({ grpcEndpoint, pkh, isReady });
-            // Create a client pointing to your Envoy proxy
-            const client = new GrpcClient(grpcEndpoint!);
+            console.log('Fetching balance for:', { grpcEndpoint, pkh, isReady });
+            const client = new GrpcClient(grpcEndpoint);
 
-            // Get balance by wallet address
-            client.getBalanceByAddress(pkh!).then(balance => {
+            // pkh from wallet is actually the "first name" (spend condition hash)
+            client.getBalanceByFirstName(pkh).then((balance) => {
                 console.log('Balance:', balance);
+                if (balance.notes.length > 0) {
+                    setBalance(balance.notes.reduce((sum: bigint, entry: BalanceEntry) => sum + BigInt(entry.note.noteVersion.v1.assets.value), BigInt(0)))
+                } else {
+                    setBalance(0);
+                }
             }).catch(error => {
-                console.error("Failed to get balance", error);
+                console.error("Failed to get balance:", {
+                    message: error?.message,
+                    name: error?.name,
+                    stack: error?.stack,
+                    fullError: error,
+                });
             });
         }
-    }, [grpcEndpoint, pkh])
+    }, [grpcEndpoint, pkh, isReady])
 
     useEffect(() => {
         if (requiredPubkeys.length < 1) {
@@ -133,6 +178,9 @@ console.log('Transaction accepted:', accepted);
     }, [requiredPubkeys, isReady]);
 
     const submitTransaction = () => {
+        if (!validateTransaction()) {
+            return;
+        }
         const transaction = buildTransaction();
         console.log('submitTransaction', transaction);
     }
@@ -142,9 +190,25 @@ console.log('Transaction accepted:', accepted);
         return null;
     }
 
+    const validateTransaction = () => {
+        const theseErrors = [];
+        if (!spendCondition) {
+            theseErrors.push('No spend condition');
+        }
+        if (!recipient) {
+            theseErrors.push('No recipient');
+        }
+        if (amount + fee > (balance || 0)) {
+            theseErrors.push('Insufficient balance');
+        }
+        setErrors(theseErrors);
+        return theseErrors.length === 0;
+    }
+
     return (
         <div className="rounded-lg bg-iris-light-yellow p-4 flex flex-col items-stretch gap-2 self-stretch mx-4 p-4">
-            <h2>Multisig Tx Builder</h2>
+            <h2 className="text-center">Multisig Tx Builder</h2>
+            <span className="text-center text-sm text-iris-black">Balance: {((balance || 0) / 65535).toFixed(6)} NOCK</span>
             <div className="flex flex-col items-stretch self-stretch gap-2">
                 {requiredPubkeys.map((pk, i) => (
                     <div
@@ -152,13 +216,13 @@ console.log('Transaction accepted:', accepted);
                         className="flex flex-col items-stretch gap-1"
                     >
                         <span className="text-sm text-iris-black">
-                            Required Pubkey {i + 1}
+                            Pubkey {i + 1}
                         </span>
                         <div className="flex gap-1">
                             <input
                                 type="text"
                                 defaultValue={pk}
-                                onBlur={(e) => setRequiredPubkeys(prev => [...prev.slice(0, i), e.target.value, ...prev.slice(i + 1)])}
+                                onChange={(e) => setRequiredPubkeys(prev => [...prev.slice(0, i), e.target.value, ...prev.slice(i + 1)])}
                                 placeholder="ABCDEF1234567890..."
                                 className="grow bg-iris-white rounded px-1"
                             />
@@ -179,10 +243,32 @@ console.log('Transaction accepted:', accepted);
                 </button>
             </div>
             <div className=" flex flex-col text-sm text-iris-black">
-                <span>Spend Condition ({requiredPubkeys.filter(pk => pk).length} signatures required)</span>
-                <code className="text-sm p-1 bg-iris-white rounded whitespace-pre-wrap">
-                    {spendCondition ? JSON.stringify(spendCondition) : 'No spend condition'}
-                </code>
+                <span>Recipient</span>
+                <input
+                    type="text"
+                    defaultValue={recipient}
+                    onChange={(e) => setRecipient(e.target.value)}
+                    placeholder="Recipient address"
+                    className="grow bg-iris-white rounded px-1"
+                />
+            </div>
+            <div className=" flex flex-col text-sm text-iris-black">
+                <span>Fee</span>
+                <input
+                    type="number"
+                    defaultValue={fee}
+                    onChange={(e) => setFee(Number(e.target.value))}
+                    placeholder="Fee amount (in NOCK)"
+                    className="grow bg-iris-white rounded px-1 text-right"
+                />
+            </div>
+            <div className=" flex flex-col text-sm text-iris-black">
+                {sigsCount > 0 && <span>({sigsCount} signatures required)</span>}
+                {errors.map((error, i) => (
+                    <div key={i} className="text-red-500 text-sm">
+                        {error}
+                    </div>
+                ))}
                 <button
                     className="bg-iris-yellow text-iris-black px-2 py-1 rounded-md"
                     onClick={() => submitTransaction()}
