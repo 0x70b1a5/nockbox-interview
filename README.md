@@ -6,6 +6,7 @@ Making an interface for users to create, sign, and send multisig transactions ov
 
 - Have the Envoy RPC server running (https://github.com/nockbox/iris-rs/tree/main/crates/iris-wasm) and make sure you configure `envoy.yaml` to point to `localhost` and a port of your choosing
 - Have a local fakenet (https://github.com/nockchain/nockchain) (make sure you confirm your wallet is set correctly and that it has a nonzero balance)
+    - I also had to ensure the hub was running on a different port than default due to the fake miner also trying to take 5555
 - Mine some NOCK on the fakenet
 - Build Iris Wallet with the RPC_ENDPOINT constant configured to your local Envoy server (https://github.com/nockbox/iris)
 - Install Iris to your browser (per the instructions in the Iris repo)
