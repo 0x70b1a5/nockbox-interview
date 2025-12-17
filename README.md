@@ -14,6 +14,7 @@ Making an interface for users to create, sign, and send multisig transactions ov
 - open `localhost:5173` in your browser
 - you should be prompted to open a wallet in your modified Iris - use existing, and paste the seedphrase for the wallet in your fakenet
 - you should see your balance on the webpage now
+    - I wish I had 13M NOCK!
 - Add as many PKHs as you like (for wallets you control on the fakenet)
 - This is the fun part: paste their mnemonic phrases in.
     - I know... I know... it's a demo.
