@@ -2,6 +2,7 @@ import init, {
     Digest,
     SpendCondition,
     LockPrimitive,
+    LockTim,
     Pkh,
     GrpcClient,
     TxBuilder,
@@ -10,20 +11,7 @@ import init, {
 } from "@nockbox/iris-wasm";
 import { useEffect, useState } from "react";
 import { useNockchain } from "../hooks/useNockchain";
-/*
-{
-  name: { first: "...", last: "..." },
-  note: {
-    noteVersion: {
-      v1: {
-        originPage: { value: "..." },
-        noteData: { hash: "..." },
-        assets: { value: 1234567 }  // ← nicks amount here
-      }
-    }
-  }
-}
-*/
+import { trimAddress } from "../utils/truncate";
 interface BalanceData {
     notes: BalanceEntry[];
     length: number;
@@ -37,81 +25,19 @@ interface BalanceData {
 interface BalanceEntry {
     name: { first: string, last: string };
     note: {
-        noteVersion: {
-            v1: {
-                originPage: { value: string };
-                noteData: { hash: string };
-                assets: { value: number };
+        note_version: {
+            V1: {
+                version: { value: string };
+                origin_page: { value: string };
+                name: { first: string, last: string };
+                note_data: { entries: any[] };
+                assets: { value: string };
             }
         }
     }
 }
 export function MultisigTxBuilder() {
-/*
-
-// Initialize the WASM module
-await init();
-
-// Create a client pointing to your Envoy proxy
-const client = new GrpcClient('http://localhost:8080');
-
-// Get balance by wallet address
-const balance = await client.get_balance_by_address(
-  '6psXufjYNRxffRx72w8FF9b5MYg8TEmWq2nEFkqYm51yfqsnkJu8XqX'
-);
-console.log('Balance:', balance);
-
-// Get balance by first name (note hash)
-const balanceByName = await client.get_balance_by_first_name(
-  '2H7WHTE9dFXiGgx4J432DsCLuMovNkokfcnCGRg7utWGM9h13PgQvsH'
-);
-console.log('Balance by name:', balanceByName);
-
-// ============================================================================
-// Building and signing transactions
-// ============================================================================
-
-// Derive keys from mnemonic
-const mnemonic = "dice domain inspire horse time...";
-const masterKey = deriveMasterKeyFromMnemonic(mnemonic, "");
-
-// Create notes from balance query
-const notes = balance.notes.map(entry => new WasmNote(
-  WasmVersion.V1(),
-  entry.note.noteVersion.v1.originPage.value,
-  new WasmName(entry.name.first, entry.name.last),
-  new WasmDigest(entry.note.noteVersion.v1.noteData.hash),
-  entry.note.noteVersion.v1.assets.value
-));
-
-// Create spend condition
-const pubkeyHash = new WasmDigest("your_pubkey_hash_here");
-const spendCondition = new WasmSpendCondition([
-  WasmLockPrimitive.newPkh(WasmPkh.single(pubkeyHash)),
-  WasmLockPrimitive.newTim(WasmLockTim.coinbase())
-]);
-
-// Build transaction
-const builder = WasmTxBuilder.newSimple(
-  notes,
-  spendCondition,
-  new WasmDigest("recipient_address"),
-  1234567, // gift
-  2850816, // fee
-  new WasmDigest("refund_address")
-);
-
-// Sign and submit
-const signedTx = builder.sign(masterKey.private_key);
-const txProtobuf = signedTx.toProtobuf();
-await client.send_transaction(txProtobuf);
-
-// Check if a transaction was accepted
-const accepted = await client.transaction_accepted(signedTx.id.value);
-console.log('Transaction accepted:', accepted);
-
-*/
-    const { nockchain, pkh, grpcEndpoint } = useNockchain();
+    const { pkh, grpcEndpoint } = useNockchain();
     const [isReady, setIsReady] = useState(false);
     const [requiredPubkeys, setRequiredPubkeys] = useState<string[]>(['']);
     const [spendCondition, setSpendCondition] = useState<SpendCondition | null>(null);
@@ -126,11 +52,12 @@ console.log('Transaction accepted:', accepted);
     const [mnemonics, setMnemonics] = useState<string[]>([]);
     const [txStatus, setTxStatus] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [pendingTxs, setPendingTxs] = useState<{ id: string; status: 'pending' | 'confirmed' | 'failed'; submittedAt: Date }[]>([]);
+    const [refreshTrigger, setRefreshTrigger] = useState(0);
 
     useEffect(() => {
         const count = requiredPubkeys.filter(pk => pk).length;
         setSigsCount(count);
-        // Initialize mnemonics array to match pubkey count
         setMnemonics(prev => {
             if (prev.length < count) {
                 return [...prev, ...Array(count - prev.length).fill('')];
@@ -169,25 +96,86 @@ console.log('Transaction accepted:', accepted);
             console.log('Fetching balance for:', { grpcEndpoint, pkh, isReady });
             const client = new GrpcClient(grpcEndpoint);
 
-            // pkh from wallet is actually the "first name" (spend condition hash)
-            client.getBalanceByFirstName(pkh).then((balanceData) => {
-                console.log('Balance:', balanceData);
-                setBalanceData(balanceData);
-                if (balanceData.notes.length > 0) {
-                    setBalance(balanceData.notes.reduce((sum: bigint, entry: BalanceEntry) => sum + BigInt(entry.note.noteVersion.v1.assets.value), BigInt(0)))
-                } else {
-                    setBalance(0);
+            try {
+                const digest = new Digest(pkh);
+                
+                const pkhSingle1 = Pkh.single(digest.value);
+                const pkhLock1 = LockPrimitive.newPkh(pkhSingle1);
+                const coinbaseLock = LockPrimitive.newTim(LockTim.coinbase());
+                const coinbaseSpendCondition = new SpendCondition([pkhLock1, coinbaseLock]);
+                
+                const pkhSingle2 = Pkh.single(new Digest(pkh).value);
+                const pkhLock2 = LockPrimitive.newPkh(pkhSingle2);
+                const simpleSpendCondition = new SpendCondition([pkhLock2]);
+                
+                const coinbaseFirstName = coinbaseSpendCondition.firstName().value;
+                const simpleFirstName = simpleSpendCondition.firstName().value;
+                
+                console.log('Coinbase SpendCondition firstName:', coinbaseFirstName);
+                console.log('Simple SpendCondition firstName:', simpleFirstName);
+                
+                const firstName = coinbaseFirstName;
+                const hashValue = coinbaseSpendCondition.hash().value;
+                
+                console.log('SpendCondition firstName:', firstName);
+                console.log('SpendCondition hash value:', hashValue);
+                
+                const queryName = firstName || hashValue;
+                console.log('Querying balance with:', queryName);
+                
+                if (queryName) {
+                    client.getBalanceByFirstName(queryName).then((balanceData) => {
+                        console.log('Balance result:', balanceData);
+                        setBalanceData(balanceData);
+                        if (balanceData.notes.length > 0) {
+                            const total = balanceData.notes.reduce((sum: bigint, entry: any) => {
+                                const value = entry.note?.note_version?.V1?.assets?.value ?? 0;
+                                return BigInt(sum) + BigInt(value);
+                            }, BigInt(0));
+                            console.log('Total balance (raw):', total.toString());
+                            setBalance(total);
+                        } else {
+                            setBalance(0);
+                        }
+                    }).catch(error => {
+                        console.error("Failed to get balance:", String(error));
+                    });
                 }
-            }).catch(error => {
-                console.error("Failed to get balance:", {
-                    message: error?.message,
-                    name: error?.name,
-                    stack: error?.stack,
-                    fullError: error,
-                });
-            });
+            } catch (error) {
+                console.error("Failed to create spend condition for balance query:", error);
+            }
         }
-    }, [grpcEndpoint, pkh, isReady])
+    }, [grpcEndpoint, pkh, isReady, refreshTrigger])
+
+    useEffect(() => {
+        if (!grpcEndpoint || pendingTxs.length === 0) return;
+        
+        const pendingIds = pendingTxs.filter(tx => tx.status === 'pending');
+        if (pendingIds.length === 0) return;
+
+        const pollInterval = setInterval(async () => {
+            const client = new GrpcClient(grpcEndpoint);
+            
+            for (const tx of pendingIds) {
+                try {
+                    const accepted = await client.transactionAccepted(tx.id);
+                    console.log(`Tx ${tx.id} accepted:`, accepted);
+                    
+                    if (accepted) {
+                        setPendingTxs(prev => prev.map(t => 
+                            t.id === tx.id ? { ...t, status: 'confirmed' as const } : t
+                        ));
+                        // Refresh balance when tx is confirmed
+                        setRefreshTrigger(prev => prev + 1);
+                    }
+                } catch (error) {
+                    console.error(`Failed to check tx ${tx.id}:`, error);
+                }
+            }
+        }, 3000); 
+
+        return () => clearInterval(pollInterval);
+    }, [grpcEndpoint, pendingTxs])
 
     useEffect(() => {
         if (requiredPubkeys.length < 1) {
@@ -207,7 +195,6 @@ console.log('Transaction accepted:', accepted);
         if (!validateTransaction()) {
             return;
         }
-        // Open the signing modal to collect mnemonics
         setShowSigningModal(true);
     }
 
@@ -218,7 +205,6 @@ console.log('Transaction accepted:', accepted);
             return null;
         }
 
-        // Convert balance notes to Note objects
         const notes = balanceData?.notes.map((entry: BalanceEntry) =>
             Note.fromProtobuf(entry.note)
         ) || [];
@@ -228,15 +214,25 @@ console.log('Transaction accepted:', accepted);
             return null;
         }
 
-        const builder = new TxBuilder(BigInt(fee || false));
+        const spendConditions = notes.map(() => {
+            const digest = new Digest(pkh!);
+            const pkhSingle = Pkh.single(digest.value);
+            const pkhLock = LockPrimitive.newPkh(pkhSingle);
+            const coinbaseLock = LockPrimitive.newTim(LockTim.coinbase());
+            return new SpendCondition([pkhLock, coinbaseLock]);
+        });
+
+        console.log(`Building tx with ${notes.length} notes and ${spendConditions.length} spend conditions`);
+
+        const builder = new TxBuilder(BigInt(fee || 0));
         builder.simpleSpend(
             notes,
-            [spendCondition!],
+            spendConditions,
             new Digest(recipient),
             BigInt(amount),
-            null, // let it calculate fee
+            null, 
             new Digest(pkh!),
-            true, // include lock data
+            true, 
         );
 
         return builder;
@@ -248,7 +244,6 @@ console.log('Transaction accepted:', accepted);
             return;
         }
 
-        // Validate all mnemonics are provided
         const emptyMnemonics = mnemonics.filter(m => !m.trim());
         if (emptyMnemonics.length > 0) {
             setErrors([`Please provide all ${sigsCount} mnemonics`]);
@@ -266,7 +261,6 @@ console.log('Transaction accepted:', accepted);
                 return;
             }
 
-            // Sign with each mnemonic
             setTxStatus(`Signing with ${sigsCount} keys...`);
             for (let i = 0; i < mnemonics.length; i++) {
                 const mnemonic = mnemonics[i].trim();
@@ -283,27 +277,31 @@ console.log('Transaction accepted:', accepted);
                 builder.sign(privateKey);
             }
 
-            // Validate the transaction
             setTxStatus('Validating transaction...');
             builder.validate();
 
-            // Build the final transaction
             setTxStatus('Building final transaction...');
             const nockchainTx = builder.build();
             const rawTx = nockchainTx.toRawTx();
             const protobuf = rawTx.toProtobuf();
 
-            // Submit via gRPC
             setTxStatus('Submitting to network...');
             const client = new GrpcClient(grpcEndpoint);
             const result = await client.sendTransaction(protobuf);
 
             console.log('Transaction submitted:', result);
-            setTxStatus(`✅ Transaction submitted! ID: ${nockchainTx.id.value}`);
+            const txId = nockchainTx.id.value;
+            setTxStatus(`✅ Transaction submitted!`);
             setShowSigningModal(false);
 
-            // Clear mnemonics for security
+            // Add to pending transactions
+            setPendingTxs(prev => [...prev, { id: txId, status: 'pending', submittedAt: new Date() }]);
+
+            // Reset form
             setMnemonics(Array(sigsCount).fill(''));
+            setRecipient('');
+            setAmount(0);
+            setFee(null);
 
         } catch (error: any) {
             console.error('Transaction failed:', error);
@@ -334,8 +332,10 @@ console.log('Transaction accepted:', accepted);
 
     return (
         <div className="rounded-lg bg-iris-light-yellow p-4 flex flex-col items-stretch gap-2 self-stretch mx-4 p-4">
-            <h2 className="text-center">Multisig Tx Builder</h2>
-            <span className="text-center text-sm text-iris-black">Balance: {((balance || 0) / 65535).toFixed(6)} NOCK</span>
+            <h2 className="text-center wrap-anywhere">Multisig Tx Builder (RPC: {grpcEndpoint})</h2>
+            {pkh && <h2 className="px-2 py-1 bg-iris-yellow wrap-anywhere text-center">{pkh}</h2>}
+            <h1 className="text-center text-3xl text-iris-black">{(BigInt(balance || 0) / BigInt(65535))} NOCK</h1>
+            <span className="text-center text-sm text-iris-black">({BigInt(balance || 0)} nick)</span>
             <div className="flex flex-col items-stretch self-stretch gap-2">
                 {requiredPubkeys.map((pk, i) => (
                     <div
@@ -373,7 +373,7 @@ console.log('Transaction accepted:', accepted);
                 <span>Recipient</span>
                 <input
                     type="text"
-                    defaultValue={recipient}
+                    defaultValue={''}
                     onChange={(e) => setRecipient(e.target.value)}
                     placeholder="Recipient address"
                     className="grow bg-iris-white rounded px-1"
@@ -420,7 +420,30 @@ console.log('Transaction accepted:', accepted);
                 </button>
             </div>
 
-            {/* Signing Modal */}
+            {/* Pending Transactions */}
+            {pendingTxs.length > 0 && (
+                <div className="mt-4 p-3 bg-iris-white rounded-lg">
+                    <h3 className="text-sm font-medium mb-2">Recent Transactions</h3>
+                    <div className="flex flex-col gap-2">
+                        {pendingTxs.slice().reverse().map((tx) => (
+                            <div key={tx.id} className="flex items-center justify-between text-xs p-2 bg-gray-50 rounded">
+                                <span className="font-mono truncate max-w-[200px]" title={tx.id}>
+                                    {trimAddress(tx.id, 8, 6)}
+                                </span>
+                                <span className={`px-2 py-0.5 rounded ${
+                                    tx.status === 'confirmed' ? 'bg-green-100 text-green-700' :
+                                    tx.status === 'failed' ? 'bg-red-100 text-red-700' :
+                                    'bg-yellow-100 text-yellow-700'
+                                }`}>
+                                    {tx.status === 'pending' ? '⏳ Pending' : 
+                                     tx.status === 'confirmed' ? '✅ Confirmed' : '❌ Failed'}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {showSigningModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                     <div className="bg-iris-light-yellow rounded-lg p-6 max-w-lg w-full mx-4 max-h-[80vh] overflow-y-auto">

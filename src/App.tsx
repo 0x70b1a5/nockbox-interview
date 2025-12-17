@@ -1,7 +1,6 @@
 import './index.css';
 import { useNockchain } from "./hooks/useNockchain";
 import { ConnectButton } from "./components/ConnectButton";
-import { trimAddress } from "./utils/truncate";
 import { MultisigTxBuilder } from './components/MultisigTxBuilder';
 
 function App() {
@@ -9,10 +8,8 @@ function App() {
 
   return <>
     <main className="flex flex-col items-center justify-center h-screen max-w-xl mx-auto  relative bg-iris-white">
-      <h1 className="text-4xl font-bold shadow-lg self-stretch p-6 text-center bg-iris-white">It's Nockbox Interview!</h1>
+      <h1 className="text-4xl font-bold shadow-lg self-stretch p-6 text-center bg-iris-black text-iris-white">It's Nockbox Interview!</h1>
       <div className="flex flex-col items-center justify-center grow self-stretch">
-        {pkh && <div>Your PKH: {trimAddress(pkh)}</div>}
-        {grpcEndpoint && <div>Endpoint: {grpcEndpoint}</div>}
         <MultisigTxBuilder />
 
         </div>
